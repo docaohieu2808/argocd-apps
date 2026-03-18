@@ -1,0 +1,107 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: simple-app-example
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    example: "true"
+    manifest-type: plain-yaml
+spec:
+  project: default-project
+
+  source:
+    # Plain YAML manifests in a subdirectory of the repo
+    repoURL: https://github.com/docaohieu2808/simple-app.git
+    targetRevision: main
+    path: k8s/
+    # No helm/kustomize block = ArgoCD treats files as plain Kubernetes YAML
+
+  destination:
+    server: https://rancher.example.com/k8s/clusters/local
+    namespace: simple-app
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - Validate=true
+      - PrunePropagationPolicy=foreground
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+---
+# Example plain-YAML manifest that would live in the repo's k8s/ directory
+# (shown here for reference — this would be a separate file in the app repo)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: simple-app
+  namespace: simple-app
+  labels:
+    app: simple-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: simple-app
+  template:
+    metadata:
+      labels:
+        app: simple-app
+    spec:
+      containers:
+        - name: simple-app
+          image: nginx:stable-alpine
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: simple-app
+  namespace: simple-app
+spec:
+  selector:
+    app: simple-app
+  ports:
+    - port: 80
+      targetPort: 80
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: simple-app
+  namespace: simple-app
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: simple-app.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: simple-app
+                port:
+                  number: 80

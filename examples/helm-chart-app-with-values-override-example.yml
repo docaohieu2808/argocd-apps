@@ -1,0 +1,132 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: helm-app-example
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    example: "true"
+    manifest-type: helm
+spec:
+  project: default-project
+
+  source:
+    repoURL: https://github.com/docaohieu2808/helm-app.git
+    targetRevision: main
+    path: chart/
+
+    helm:
+      releaseName: helm-app
+      # Stack multiple value files; later files override earlier ones
+      valueFiles:
+        - values.yaml
+        - values-production.yaml
+      # Inline parameter overrides (highest precedence)
+      parameters:
+        - name: image.tag
+          value: "1.2.3"
+        - name: replicaCount
+          value: "2"
+        - name: ingress.enabled
+          value: "true"
+        - name: ingress.hostname
+          value: helm-app.example.com
+      # Pass extra values as raw YAML string
+      values: |
+        podAnnotations:
+          prometheus.io/scrape: "true"
+          prometheus.io/port: "8080"
+        podLabels:
+          environment: production
+          team: platform
+      # Skip CRD installation (manage CRDs separately)
+      skipCrds: false
+      version: v3
+
+  destination:
+    server: https://rancher.example.com/k8s/clusters/local
+    namespace: helm-app
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - Validate=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # Ignore HPA-managed replica count drift
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+
+---
+# Example: Kustomize-based app (alternative to Helm)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kustomize-app-example
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    example: "true"
+    manifest-type: kustomize
+spec:
+  project: default-project
+
+  source:
+    repoURL: https://git.example.com/docaohieu/kustomize-app.git
+    targetRevision: main
+    # Point to an environment-specific kustomize overlay
+    path: kustomize/overlays/production
+
+    kustomize:
+      # Override image tags without editing kustomization.yaml
+      images:
+        - name: app
+          newTag: "1.0.0"
+      # Append common labels to all resources
+      commonLabels:
+        environment: production
+        managed-by: argocd
+      # Append common annotations
+      commonAnnotations:
+        argocd.argoproj.io/managed: "true"
+      # Namespace suffix/prefix for multi-tenant overlays
+      namePrefix: "prod-"
+
+  destination:
+    server: https://rancher.example.com/k8s/clusters/local
+    namespace: kustomize-app-production
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - Validate=true
+      - PrunePropagationPolicy=foreground
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

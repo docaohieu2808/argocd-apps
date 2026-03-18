@@ -1,0 +1,77 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: github-docaohieu2808-auto-discover
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    provider: github
+    org: docaohieu2808
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+
+  generators:
+    # SCM provider generator: auto-discovers all repos in docaohieu2808 GitHub org
+    - scmProvider:
+        github:
+          organization: docaohieu2808
+          allBranches: false
+        filters:
+          - repositoryMatch: ".*"
+            branchMatch: "^(main|master)$"
+            pathsExist:
+              - Chart.yaml   # Helm apps
+            labelMatch: "argocd-managed"
+
+    # Pull request generator: deploy PRs to preview environments
+    - pullRequest:
+        github:
+          owner: docaohieu2808
+          labels:
+            - preview
+        requeueAfterSeconds: 60
+
+  template:
+    metadata:
+      name: "github-{{.repository}}-{{.branch}}"
+      namespace: argocd
+      labels:
+        app.kubernetes.io/managed-by: argocd
+        provider: github
+        repo: "{{.repository}}"
+    spec:
+      project: default-project
+
+      source:
+        repoURL: "{{.url}}"
+        targetRevision: "{{.branch}}"
+        path: "."
+        helm:
+          releaseName: "{{.repository}}"
+          valueFiles:
+            - values.yaml
+
+      destination:
+        server: https://rancher.example.com/k8s/clusters/local
+        namespace: "github-{{.repository}}"
+
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+          allowEmpty: false
+        syncOptions:
+          - CreateNamespace=true
+          - Validate=true
+          - PrunePropagationPolicy=foreground
+          - PruneLast=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
+
+  syncPolicy:
+    preserveResourcesOnDeletion: false

@@ -1,0 +1,73 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: gitlab-docaohieu-auto-discover
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    provider: gitlab
+    server: git.example.com
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+
+  generators:
+    # SCM provider generator: auto-discovers all repos from self-hosted GitLab
+    - scmProvider:
+        gitlab:
+          group: ""          # empty = discover all accessible groups/projects
+          api: https://git.example.com
+          tokenRef:
+            secretName: gitlab-token
+            key: token
+          allBranches: false
+          includeSubgroups: true
+        filters:
+          - branchMatch: "^(main|master)$"
+            pathsExist:
+              - Chart.yaml
+            labelMatch: "argocd-managed"
+
+  template:
+    metadata:
+      name: "gitlab-{{.repository}}-{{.branch}}"
+      namespace: argocd
+      labels:
+        app.kubernetes.io/managed-by: argocd
+        provider: gitlab
+        repo: "{{.repository}}"
+    spec:
+      project: default-project
+
+      source:
+        repoURL: "{{.url}}"
+        targetRevision: "{{.branch}}"
+        path: "."
+        helm:
+          releaseName: "{{.repository}}"
+          valueFiles:
+            - values.yaml
+
+      destination:
+        server: https://rancher.example.com/k8s/clusters/local
+        namespace: "gitlab-{{.repository}}"
+
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+          allowEmpty: false
+        syncOptions:
+          - CreateNamespace=true
+          - Validate=true
+          - PrunePropagationPolicy=foreground
+          - PruneLast=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
+
+  syncPolicy:
+    preserveResourcesOnDeletion: false

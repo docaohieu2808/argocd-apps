@@ -1,0 +1,94 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: default-project
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app.kubernetes.io/managed-by: argocd
+spec:
+  description: "Default project for docaohieu2808 (GitHub) and git.example.com (GitLab) apps across staging and production"
+
+  # Allowed source repositories
+  sourceRepos:
+    - "https://github.com/docaohieu2808/*"
+    - "https://git.example.com/*"
+    - "https://charts.helm.sh/stable"
+    - "https://charts.bitnami.com/bitnami"
+
+  # Allowed destination clusters and namespaces
+  destinations:
+    - server: https://rancher.example.com/k8s/clusters/local
+      namespace: "*"
+
+  # Cluster-scoped resource whitelist
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    - group: "rbac.authorization.k8s.io"
+      kind: ClusterRole
+    - group: "rbac.authorization.k8s.io"
+      kind: ClusterRoleBinding
+    - group: "networking.k8s.io"
+      kind: IngressClass
+    - group: "apiextensions.k8s.io"
+      kind: CustomResourceDefinition
+
+  # Namespace-scoped resource blacklist (deny sensitive resources)
+  namespaceResourceBlacklist:
+    - group: ""
+      kind: ResourceQuota
+    - group: ""
+      kind: LimitRange
+
+  # Namespace-scoped resource whitelist
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+
+  # Orphaned resources monitoring
+  orphanedResources:
+    warn: true
+
+  # RBAC roles within this project
+  roles:
+    - name: staging-deployer
+      description: "Can sync staging applications"
+      policies:
+        - "p, proj:default-project:staging-deployer, applications, get, default-project/*, allow"
+        - "p, proj:default-project:staging-deployer, applications, sync, default-project/*-staging, allow"
+        - "p, proj:default-project:staging-deployer, applications, override, default-project/*-staging, allow"
+      groups:
+        - staging-team
+
+    - name: production-deployer
+      description: "Can sync production applications"
+      policies:
+        - "p, proj:default-project:production-deployer, applications, get, default-project/*, allow"
+        - "p, proj:default-project:production-deployer, applications, sync, default-project/*-production, allow"
+        - "p, proj:default-project:production-deployer, applications, override, default-project/*-production, allow"
+      groups:
+        - production-team
+
+    - name: read-only
+      description: "Read-only access to all applications"
+      policies:
+        - "p, proj:default-project:read-only, applications, get, default-project/*, allow"
+      groups:
+        - developers
+
+  # Sync windows: restrict production syncs to business hours
+  syncWindows:
+    - kind: allow
+      schedule: "0 8 * * 1-5"   # Mon–Fri 08:00
+      duration: 10h
+      applications:
+        - "*-production"
+      manualSync: true
+    - kind: allow
+      schedule: "* * * * *"     # always open for staging
+      duration: 24h
+      applications:
+        - "*-staging"
+      manualSync: true

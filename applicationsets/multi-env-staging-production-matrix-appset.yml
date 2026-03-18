@@ -1,0 +1,104 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: multi-env-staging-production-matrix
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    pattern: matrix-generator
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+
+  generators:
+    # Matrix generator: cross-product of repos × environments
+    - matrix:
+        generators:
+          # Inner generator 1: discover repos from a config list
+          - list:
+              elements:
+                - repo: https://github.com/docaohieu2808/app-frontend
+                  repoName: app-frontend
+                  branch: main
+                - repo: https://github.com/docaohieu2808/app-backend
+                  repoName: app-backend
+                  branch: main
+                - repo: https://git.example.com/docaohieu/app-api
+                  repoName: app-api
+                  branch: main
+
+          # Inner generator 2: environments
+          - list:
+              elements:
+                - environment: staging
+                  valuesFile: values-staging.yaml
+                  targetRevision: develop
+                  replicaCount: "1"
+                  ingressSuffix: .staging.example.com
+                - environment: production
+                  valuesFile: values-production.yaml
+                  targetRevision: main
+                  replicaCount: "2"
+                  ingressSuffix: .docaohieu.com
+
+  template:
+    metadata:
+      name: "{{.repoName}}-{{.environment}}"
+      namespace: argocd
+      labels:
+        app.kubernetes.io/managed-by: argocd
+        environment: "{{.environment}}"
+        app: "{{.repoName}}"
+      annotations:
+        notifications.argoproj.io/subscribe.on-sync-failed.slack: argocd-alerts
+        notifications.argoproj.io/subscribe.on-health-degraded.slack: argocd-alerts
+    spec:
+      project: default-project
+
+      source:
+        repoURL: "{{.repo}}"
+        targetRevision: "{{.targetRevision}}"
+        path: "."
+        helm:
+          releaseName: "{{.repoName}}"
+          valueFiles:
+            - values.yaml
+            - "{{.valuesFile}}"
+          parameters:
+            - name: replicaCount
+              value: "{{.replicaCount}}"
+            - name: ingress.hostname
+              value: "{{.repoName}}{{.ingressSuffix}}"
+            - name: environment
+              value: "{{.environment}}"
+
+      destination:
+        server: https://rancher.example.com/k8s/clusters/local
+        namespace: "{{.repoName}}-{{.environment}}"
+
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+          allowEmpty: false
+        syncOptions:
+          - CreateNamespace=true
+          - Validate=true
+          - PrunePropagationPolicy=foreground
+          - PruneLast=true
+          - RespectIgnoreDifferences=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
+
+      ignoreDifferences:
+        - group: apps
+          kind: Deployment
+          jsonPointers:
+            - /spec/replicas   # allow HPA to manage replicas in production
+
+  syncPolicy:
+    preserveResourcesOnDeletion: false

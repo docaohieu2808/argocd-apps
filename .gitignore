@@ -1,0 +1,17 @@
+# Claude Code planning and session files
+plans/
+docs/
+.claude/
+
+# Editor and OS artifacts
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Secrets — never commit tokens or kubeconfigs
+secrets/
+*.secret.yml
+*.secret.yaml
+kubeconfig
