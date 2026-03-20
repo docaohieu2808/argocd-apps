@@ -1,0 +1,113 @@
+# ArgoCD repo-server sidecar patch — mounts envsubst CMP into argocd-repo-server
+#
+# This is a strategic merge patch for the argocd-repo-server Deployment.
+# Apply with:
+#   kubectl patch deployment argocd-repo-server -n argocd \
+#     --patch-file argocd-repo-server-sidecar-patch-envsubst-config-management-plugin.yaml
+#
+# Or reference from an ArgoCD ApplicationSet / Kustomize patchesStrategicMerge.
+#
+# What this does:
+#   1. Adds a ConfigMap volume containing the CMP spec
+#   2. Adds a shared unix-socket volume for CMP IPC with argocd-repo-server
+#   3. Adds a sidecar container (alpine + gettext) that runs the CMP server
+#
+# Reference: https://argo-cd.readthedocs.io/en/stable/operator-manual/config-management-plugins/#installing-a-config-management-plugin
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argocd-repo-server
+  namespace: argocd
+spec:
+  template:
+    spec:
+
+      # ── Init container: copy argocd-cmp-server binary into shared volume ──
+      initContainers:
+        - name: copy-cmp-server-binary
+          image: quay.io/argoproj/argocd:v2.12.0   # pin to match your ArgoCD version
+          command:
+            - cp
+            - /usr/local/bin/argocd
+            - /var/run/argocd/argocd-cmp-server
+          volumeMounts:
+            - name: argocd-cmp-server-binary
+              mountPath: /var/run/argocd
+
+      # ── Sidecar container: runs the envsubst CMP server ───────────────────
+      containers:
+        - name: envsubst-cmp-server
+          # alpine with gettext provides envsubst; busybox does not include it
+          image: alpine:3.19
+          command:
+            - /var/run/argocd/argocd-cmp-server
+          args:
+            - --loglevel=info
+          env:
+            - name: ARGOCD_ENV_HOME
+              value: /home/argocd
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999      # matches argocd user in the main container
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          volumeMounts:
+            # IPC socket dir — argocd-repo-server discovers CMPs via this dir
+            - name: argocd-cmp-socket-dir
+              mountPath: /home/argocd/cmp-server/plugins
+
+            # CMP plugin spec (ConfigManagementPlugin YAML)
+            - name: envsubst-cmp-plugin-config
+              mountPath: /home/argocd/cmp-server/config/plugin.yaml
+              subPath: plugin.yaml
+
+            # Shared argocd-cmp-server binary from init container
+            - name: argocd-cmp-server-binary
+              mountPath: /var/run/argocd
+
+            # Writable tmp dir (required by argocd-cmp-server)
+            - name: cmp-tmp-dir
+              mountPath: /tmp
+
+          # Install envsubst (gettext) before the CMP server starts
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - sh
+                  - -c
+                  - apk add --no-cache gettext >/dev/null 2>&1
+
+      # ── Volumes ────────────────────────────────────────────────────────────
+      volumes:
+        # Unix socket directory for CMP IPC
+        - name: argocd-cmp-socket-dir
+          emptyDir: {}
+
+        # Writable /tmp for the sidecar
+        - name: cmp-tmp-dir
+          emptyDir: {}
+
+        # Binary shared from init container
+        - name: argocd-cmp-server-binary
+          emptyDir: {}
+
+        # ConfigManagementPlugin spec — mounted as plugin.yaml
+        # The CMP YAML is stored in a ConfigMap created separately:
+        #   kubectl create configmap argocd-envsubst-cmp-plugin \
+        #     --from-file=plugin.yaml=argocd-custom-config-management-plugin-envsubst-template-yaml-files.yaml \
+        #     -n argocd
+        - name: envsubst-cmp-plugin-config
+          configMap:
+            name: argocd-envsubst-cmp-plugin

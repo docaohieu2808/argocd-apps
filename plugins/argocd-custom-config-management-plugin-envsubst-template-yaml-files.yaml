@@ -1,0 +1,104 @@
+# ArgoCD Custom Config Management Plugin (CMP) — envsubst templating for *.yaml.tmpl files
+# CRD: argoproj.io/v1alpha1 ConfigManagementPlugin
+#
+# This plugin handles projects that use .env files to template K8s manifests.
+# Workflow:
+#   1. Reads .env file from the repo root (if present) to export env vars
+#   2. Finds all *.yaml.tmpl files in the source directory
+#   3. Runs envsubst on each, outputs valid K8s YAML to stdout
+#   4. ArgoCD syncs the generated manifests
+#
+# Install: add this ConfigMap to argocd namespace and mount as sidecar
+#          (see argocd-plugin-sidecar-container-config-envsubst-repo-server-patch.yaml)
+#
+# Reference: https://argo-cd.readthedocs.io/en/stable/operator-manual/config-management-plugins/
+
+apiVersion: argoproj.io/v1alpha1
+kind: ConfigManagementPlugin
+metadata:
+  name: envsubst-yaml-tmpl
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: argocd
+    app.kubernetes.io/component: config-management-plugin
+spec:
+  version: v1.0
+
+  # ── Discovery ─────────────────────────────────────────────────────────────
+  # ArgoCD uses this to auto-select the plugin for a given repo.
+  # Matches any repo that contains at least one *.yaml.tmpl file.
+  discover:
+    find:
+      command:
+        - sh
+        - -c
+        - |
+          # Return exit 0 (match) if any *.yaml.tmpl files exist in tree
+          find . -name "*.yaml.tmpl" | grep -q . && echo "found yaml.tmpl files" || exit 1
+
+  # ── Init ──────────────────────────────────────────────────────────────────
+  # Runs once before generate; installs envsubst if not present.
+  init:
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        # envsubst ships with gettext; ensure it is available
+        if ! command -v envsubst > /dev/null 2>&1; then
+          echo "[cmp-init] envsubst not found — install via sidecar image (see sidecar config)" >&2
+          exit 1
+        fi
+        echo "[cmp-init] envsubst $(envsubst --version 2>&1 | head -1) ready"
+
+  # ── Generate ──────────────────────────────────────────────────────────────
+  # Reads .env, exports vars, runs envsubst on every *.yaml.tmpl, emits YAML.
+  generate:
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+
+        # 1. Load .env file if present (KEY=VALUE pairs, skip comments/blanks)
+        if [ -f ".env" ]; then
+          echo "[cmp-generate] loading .env" >&2
+          set -a
+          # shellcheck disable=SC1091
+          . ./.env
+          set +a
+        fi
+
+        # 2. Also honour ARGOCD_APP_* env vars injected by ArgoCD itself:
+        #    ARGOCD_APP_NAME, ARGOCD_APP_NAMESPACE, ARGOCD_APP_REVISION, etc.
+
+        # 3. Process every *.yaml.tmpl file (sorted for deterministic output)
+        FOUND=0
+        for tmpl in $(find . -name "*.yaml.tmpl" | sort); do
+          echo "[cmp-generate] processing $tmpl" >&2
+          # Print YAML document separator between files
+          [ "$FOUND" -gt 0 ] && echo "---"
+          envsubst < "$tmpl"
+          FOUND=$((FOUND + 1))
+        done
+
+        if [ "$FOUND" -eq 0 ]; then
+          echo "[cmp-generate] no *.yaml.tmpl files found — emitting empty document" >&2
+          echo "{}"
+        fi
+
+        echo "[cmp-generate] processed $FOUND template(s)" >&2
+
+  # ── Parameters ────────────────────────────────────────────────────────────
+  # Exposed in ArgoCD UI / API for per-app overrides.
+  parameters:
+    static:
+      - name: env_file
+        title: ".env file path"
+        tooltip: "Path to the .env file relative to repo root (default: .env)"
+        string: ".env"
+
+      - name: template_glob
+        title: "Template glob pattern"
+        tooltip: "Glob pattern for template files (default: **/*.yaml.tmpl)"
+        string: "**/*.yaml.tmpl"
