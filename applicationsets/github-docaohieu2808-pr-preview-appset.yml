@@ -1,0 +1,80 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: github-docaohieu2808-pr-preview
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    provider: github
+    org: docaohieu2808
+    type: pr-preview
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+
+  generators:
+    # Pull request generator: deploys PRs labelled "preview" to ephemeral namespaces.
+    # Emits: .number, .branch, .branch_slug, .head_sha, .head_short_sha, .repository
+    # NOTE: does NOT emit .url — repoURL is hardcoded per-repo or parameterized
+    #       via a matrix generator if multi-repo support is needed.
+    - pullRequest:
+        github:
+          owner: docaohieu2808
+          # repo: target-repo-name   # uncomment to scope to one repo
+          labels:
+            - preview
+          tokenRef:
+            secretName: argocd-github-token
+            key: token
+        requeueAfterSeconds: 60
+
+  template:
+    metadata:
+      name: "pr-preview-{{.repository}}-{{.number}}"
+      namespace: argocd
+      labels:
+        app.kubernetes.io/managed-by: argocd
+        provider: github
+        type: pr-preview
+        pr-number: "{{.number}}"
+      annotations:
+        # Auto-delete preview app when PR is closed/merged
+        argocd-image-updater.argoproj.io/write-back-method: none
+    spec:
+      project: default-project
+
+      source:
+        # pullRequest generator does not emit .url; construct repoURL explicitly.
+        repoURL: "https://github.com/docaohieu2808/{{.repository}}.git"
+        targetRevision: "{{.head_sha}}"
+        path: "."
+        helm:
+          releaseName: "pr-{{.number}}-{{.repository}}"
+          valueFiles:
+            - values.yaml
+          parameters:
+            - name: image.tag
+              value: "pr-{{.number}}-{{.head_short_sha}}"
+
+      destination:
+        server: https://rancher.example.com/k8s/clusters/local
+        namespace: "pr-preview-{{.branch_slug}}"
+
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: false   # don't auto-heal preview envs; manual review intended
+          allowEmpty: false
+        syncOptions:
+          - CreateNamespace=true
+          - Validate=true
+          - PrunePropagationPolicy=foreground
+        retry:
+          limit: 3
+          backoff:
+            duration: 10s
+            factor: 2
+            maxDuration: 2m
+
+  syncPolicy:
+    preserveResourcesOnDeletion: false

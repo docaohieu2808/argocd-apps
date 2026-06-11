@@ -12,7 +12,8 @@ spec:
   goTemplateOptions: ["missingkey=error"]
 
   generators:
-    # SCM provider generator: auto-discovers all repos in docaohieu2808 GitHub org
+    # SCM provider generator: auto-discovers all repos in docaohieu2808 GitHub org.
+    # Emits: .url, .repository, .branch, .organization, .labels, .defaultBranch
     - scmProvider:
         github:
           organization: docaohieu2808
@@ -21,16 +22,8 @@ spec:
           - repositoryMatch: ".*"
             branchMatch: "^(main|master)$"
             pathsExist:
-              - Chart.yaml   # Helm apps
+              - Chart.yaml   # Helm apps only
             labelMatch: "argocd-managed"
-
-    # Pull request generator: deploy PRs to preview environments
-    - pullRequest:
-        github:
-          owner: docaohieu2808
-          labels:
-            - preview
-        requeueAfterSeconds: 60
 
   template:
     metadata:
