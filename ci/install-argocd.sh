@@ -43,6 +43,10 @@ while read -r image; do
   kind load docker-image "$image" --name "$cluster"
 done < <(grep -E '^\s+image: ' "$manifest" | awk '{print $2}' | sort -u)
 
+# The manifest says imagePullPolicy: Always, which would make the node re-pull from the throttled registry
+# instead of using the image just loaded; use the loaded images.
+sed -i 's/imagePullPolicy: Always/imagePullPolicy: IfNotPresent/' "$manifest"
+
 kubectl create namespace argocd
 kubectl apply --server-side --force-conflicts -n argocd -f "$manifest"
 kubectl -n argocd rollout status statefulset/argocd-application-controller --timeout=300s
