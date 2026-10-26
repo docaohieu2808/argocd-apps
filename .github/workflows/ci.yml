@@ -162,7 +162,10 @@ jobs:
           kubectl -n argocd patch deployment argocd-repo-server --patch-file "$RUNNER_TEMP/patch.yaml"
           kubectl -n argocd rollout status deployment/argocd-repo-server --timeout=300s
           kubectl -n argocd get pods -l app.kubernetes.io/name=argocd-repo-server
-          kubectl -n argocd logs deployment/argocd-repo-server -c envsubst-cmp
+          # Pick the new pod: the old replica can still be terminating and has no sidecar.
+          pod=$(kubectl -n argocd get pods -l app.kubernetes.io/name=argocd-repo-server -o json \
+            | jq -r '.items[] | select(any(.spec.containers[]; .name == "envsubst-cmp")) | .metadata.name' | head -1)
+          kubectl -n argocd logs "$pod" -c envsubst-cmp | tee /dev/stderr | grep -q 'serving on .*envsubst-yaml-tmpl.sock'
       - name: Sync an app that only renders through the plugin
         env:
           SHA: ${{ github.event.pull_request.head.sha || github.sha }}
