@@ -39,7 +39,7 @@ spec:
       source:
         repoURL: https://github.com/docaohieu2808/argocd-test-deploy.git
         targetRevision: "{{.head_sha}}"
-        path: k8s
+        path: k8s/base
       destination:
         server: https://kubernetes.default.svc
         # Includes the repo name so two repos with the same PR number or branch never collide.

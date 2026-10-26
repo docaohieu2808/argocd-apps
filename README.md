@@ -55,7 +55,7 @@ To use your own fork, change `repoURL` in `bootstrap/root-app.yaml`, `apps/child
 | `apps/child-applications.yml` | App-of-apps, sync waves, `prune: false` for config you must not lose |
 | `projects/default-project-rbac-and-source-repos.yml` | AppProject: allowed repos, destinations, cluster-scoped resource whitelist, project roles and groups |
 | `rbac/argocd-rbac-cm.yaml` | Argo CD 3.x RBAC: `update/*` and `delete/*` sub-resource policies, `applicationsets` resource, group mapping, `policy.default` |
-| `applicationsets/matrix-...yml` | Matrix of two list generators, `goTemplate` with `missingkey=error`, per-environment `kustomize.replicas` |
+| `applicationsets/matrix-...yml` | Matrix of two list generators, `goTemplate` with `missingkey=error`, per-environment Kustomize overlays (`k8s/overlays/<env>` in argocd-test-deploy) |
 | `applicationsets/pr-preview-...yml` | Pull request generator: `repo` is required (one AppSet per repo), the params it really emits (`number`, `branch_slug`, `head_sha`, ...), preview namespace per PR |
 
 ## Not synced: `examples/` and `plugins/`

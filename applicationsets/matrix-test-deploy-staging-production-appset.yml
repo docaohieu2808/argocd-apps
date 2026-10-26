@@ -1,7 +1,9 @@
 # Matrix generator: every app in the first list is deployed once per environment in the second list.
-# Today the app list holds one entry, the public argocd-test-deploy repo (plain YAML + kustomization.yaml),
-# so this renders two real Applications: test-deploy-staging (1 replica) and test-deploy-production (2).
-# Add more elements to the first list to fan out more apps.
+# Today the app list holds one entry, the public argocd-test-deploy repo, whose k8s/overlays/<environment> are
+# Kustomize overlays (1 replica in staging, 2 in production), so this renders two real Applications:
+# test-deploy-staging and test-deploy-production. Add more elements to the first list to fan out more apps.
+# (Per-environment values come from overlays in Git, not from Application-level kustomize.replicas: two apps
+# sharing one repo path and different kustomize options rendered the same replicas in testing.)
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
@@ -19,14 +21,11 @@ spec:
               elements:
                 - repoURL: https://github.com/docaohieu2808/argocd-test-deploy.git
                   appName: test-deploy
-                  path: k8s
-                  deploymentName: demo-web
+                  overlaysPath: k8s/overlays
           - list:
               elements:
                 - environment: staging
-                  replicas: "1"
                 - environment: production
-                  replicas: "2"
   template:
     metadata:
       name: "{{.appName}}-{{.environment}}"
@@ -39,11 +38,7 @@ spec:
       source:
         repoURL: "{{.repoURL}}"
         targetRevision: HEAD
-        path: "{{.path}}"
-        kustomize:
-          replicas:
-            - name: "{{.deploymentName}}"
-              count: "{{.replicas}}"
+        path: "{{.overlaysPath}}/{{.environment}}"
       destination:
         server: https://kubernetes.default.svc
         namespace: "{{.appName}}-{{.environment}}"

@@ -21,7 +21,7 @@ spec:
       source:
         repoURL: https://github.com/docaohieu2808/argocd-test-deploy.git
         targetRevision: HEAD
-        path: k8s
+        path: k8s/base
       destination:
         server: "{{.server}}"
         namespace: test-deploy

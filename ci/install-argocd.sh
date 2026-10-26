@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Install Argo CD from the upstream manifest of one release into a kind cluster and wait until it is ready.
 # Usage: install-argocd.sh <version, e.g. v3.5.6> <kind cluster name>
-# - Images are pulled on the runner (with retries) and loaded into kind: pulls made by the node itself from
-#   public.ecr.aws (the redis image) intermittently ended in ImagePullBackOff and stalled the whole job.
+# - Images are pulled on the runner (with retries) and loaded into kind: anonymous pulls from public.ecr.aws (the
+#   redis image) are rate-limited on GitHub runners ("toomanyrequests: Data limit exceeded"), so those fall back to
+#   the Docker Hub library image through mirror.gcr.io, then docker.io.
 # - --server-side: the ApplicationSet CRD is too large for the client-side apply annotation.
 set -euo pipefail
 
@@ -16,12 +17,29 @@ diagnose() {
 trap diagnose ERR
 
 curl -sSfL -o "$manifest" "https://raw.githubusercontent.com/argoproj/argo-cd/${version}/manifests/install.yaml"
-while read -r image; do
-  for attempt in 1 2 3 4 5; do
-    docker pull --quiet "$image" >/dev/null && break
-    [ "$attempt" -lt 5 ] || { echo "could not pull $image" >&2; exit 1; }
+# pull_with_fallback <image>: try the manifest's image first, then mirrors of the same Docker Hub library image,
+# and tag whatever worked with the original name so the manifest needs no edit.
+pull_with_fallback() {
+  local image=$1 candidates=("$1") name
+  if [[ $image == public.ecr.aws/docker/library/* ]]; then
+    name=${image#public.ecr.aws/docker/library/}
+    candidates+=("mirror.gcr.io/library/$name" "docker.io/library/$name")
+  fi
+  for attempt in 1 2 3; do
+    for candidate in "${candidates[@]}"; do
+      if docker pull --quiet "$candidate" >/dev/null; then
+        [ "$candidate" = "$image" ] || docker tag "$candidate" "$image"
+        return 0
+      fi
+    done
     sleep $((attempt * 5))
   done
+  echo "could not pull $image" >&2
+  return 1
+}
+
+while read -r image; do
+  pull_with_fallback "$image"
   kind load docker-image "$image" --name "$cluster"
 done < <(grep -E '^\s+image: ' "$manifest" | awk '{print $2}' | sort -u)
 
