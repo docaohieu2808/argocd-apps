@@ -1,0 +1,101 @@
+# Child Applications of the bootstrap root-app (bootstrap/root-app.yaml). Sync waves order them:
+# projects (0) -> RBAC (1) -> ApplicationSets (2), so the AppProject exists before anything references it.
+# Wave 0: AppProject resources. Lives in the built-in `default` project because it creates `default-project`.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: projects-app
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  labels:
+    app.kubernetes.io/part-of: app-of-apps
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/docaohieu2808/argocd-apps.git
+    targetRevision: HEAD
+    path: projects
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+---
+# Wave 1: argocd-rbac-cm only. prune is OFF: this app must never delete Argo CD's own configuration.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rbac-app
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  labels:
+    app.kubernetes.io/part-of: app-of-apps
+spec:
+  project: default-project
+  source:
+    repoURL: https://github.com/docaohieu2808/argocd-apps.git
+    targetRevision: HEAD
+    path: rbac
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+---
+# Wave 2: ApplicationSets (they reference default-project, so the project must already exist).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: applicationsets-app
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+  labels:
+    app.kubernetes.io/part-of: app-of-apps
+spec:
+  project: default-project
+  source:
+    repoURL: https://github.com/docaohieu2808/argocd-apps.git
+    targetRevision: HEAD
+    path: applicationsets
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

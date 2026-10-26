@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${ARGOCD_APP_NAME}
+  labels:
+    app: ${ARGOCD_APP_NAME}
+spec:
+  replicas: ${ARGOCD_ENV_REPLICAS}
+  selector:
+    matchLabels:
+      app: ${ARGOCD_APP_NAME}
+  template:
+    metadata:
+      labels:
+        app: ${ARGOCD_APP_NAME}
+    spec:
+      containers:
+        - name: web
+          image: nginx:${ARGOCD_ENV_IMAGE_TAG}
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi

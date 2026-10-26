@@ -1,0 +1,49 @@
+# Config Management Plugin (CMP) that renders *.yaml.tmpl files with envsubst.
+# A CMP is NOT a Kubernetes resource (the ConfigManagementPlugin CRD was removed in Argo CD 2.8): its spec is a
+# plugin.yaml FILE that the sidecar reads at /home/argocd/cmp-server/config/plugin.yaml. Shipping that file in a
+# ConfigMap and mounting it with subPath (see envsubst-cmp-repo-server-sidecar-patch.yaml) is the usual way.
+#
+# Usage in an Application:  source.plugin: {name: envsubst-yaml-tmpl, env: [{name: IMAGE_TAG, value: "1.30.6"}]}
+# Argo CD hands plugin.env entries to the plugin as ARGOCD_ENV_<NAME> (so ${ARGOCD_ENV_IMAGE_TAG} in a template),
+# next to its built-ins ARGOCD_APP_NAME, ARGOCD_APP_NAMESPACE, ARGOCD_APP_REVISION, ...
+# Security: templates are rendered, never sourced as shell, and only the variables listed below are substituted,
+# so a repository cannot run code or read arbitrary environment variables through the plugin.
+# Install:  kubectl apply -n argocd -f envsubst-cmp-plugin-configmap.yaml
+#           kubectl -n argocd patch deployment argocd-repo-server --patch-file envsubst-cmp-repo-server-sidecar-patch.yaml
+# Reference: https://argo-cd.readthedocs.io/en/stable/operator-manual/config-management-plugins/
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-envsubst-cmp-plugin
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: argocd
+    app.kubernetes.io/component: config-management-plugin
+data:
+  plugin.yaml: |
+    apiVersion: argoproj.io/v1alpha1
+    kind: ConfigManagementPlugin
+    metadata:
+      name: envsubst-yaml-tmpl
+    spec:
+      # Selects this plugin automatically for any source that contains a *.yaml.tmpl file.
+      discover:
+        find:
+          glob: "**/*.yaml.tmpl"
+      generate:
+        command: [sh, -c]
+        args:
+          - |
+            set -eu
+            found=0
+            # Only these variables are substituted; anything else in a template stays literal.
+            vars='${ARGOCD_APP_NAME} ${ARGOCD_APP_NAMESPACE} ${ARGOCD_APP_REVISION} ${ARGOCD_ENV_IMAGE_TAG} ${ARGOCD_ENV_REPLICAS}'
+            for tmpl in $(find . -name '*.yaml.tmpl' | sort); do
+              [ "$found" -gt 0 ] && echo '---'
+              envsubst "$vars" < "$tmpl"
+              found=$((found + 1))
+            done
+            if [ "$found" -eq 0 ]; then
+              echo "envsubst plugin: no *.yaml.tmpl files under $(pwd)" >&2
+              exit 1
+            fi

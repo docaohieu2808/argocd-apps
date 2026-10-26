@@ -1,65 +1,115 @@
 # argocd-apps
 
-App-of-apps GitOps control plane for ArgoCD. Manages all ArgoCD resources declaratively: ApplicationSets, AppProjects, RBAC, and CMP plugins.
+App-of-apps GitOps control plane for Argo CD 3.x: one bootstrap Application pulls in AppProjects, RBAC and
+ApplicationSets from this repository. CI installs a real Argo CD in a kind cluster and proves the whole thing syncs.
 
-## Structure
+## What is here
 
 ```
 argocd-apps/
-├── apps/                  # App-of-apps entry point — bootstrap here
-│   └── root-app-of-apps-entry-point.yml   # root-app + 3 child apps
-├── applicationsets/       # ApplicationSet resources (auto-discover + PR preview)
-├── projects/              # AppProject resources (RBAC, source repos, sync windows)
-├── rbac/                  # ArgoCD RBAC ConfigMap, SSO/Dex config, ExternalSecret
-├── plugins/               # Config Management Plugin (envsubst CMP) patches
-└── examples/              # Reference Application manifests (not managed by root-app)
+├── bootstrap/root-app.yaml        # the ONE file you kubectl apply (project `default`, path apps/)
+├── apps/                          # child Applications + kustomization.yaml, sync-waved: projects, rbac, applicationsets
+├── projects/                      # AppProject `default-project` (source repos, destinations, roles)
+├── rbac/                          # argocd-rbac-cm (3.x policy), synced with prune OFF
+├── applicationsets/               # live ApplicationSets
+│   ├── matrix-test-deploy-staging-production-appset.yml   # matrix: app x environment, deploys argocd-test-deploy
+│   └── pr-preview-argocd-test-deploy-appset.yml           # pullRequest generator, one preview app per labelled PR
+├── plugins/                       # envsubst Config Management Plugin: ConfigMap, repo-server sidecar patch, Dockerfile, example app
+├── examples/                      # NOT synced: reference manifests (see below)
+└── ci/                            # scripts used by .github/workflows/ci.yml
 ```
 
-## Bootstrap (k3s + ArgoCD)
+Why the layout looks like this:
+
+- `bootstrap/root-app.yaml` is outside `apps/` so the root never manages itself, and it lives in Argo CD's built-in
+  `default` project because `default-project` is created by `projects-app`, a child of the root.
+- Sync waves (`projects-app` 0, `rbac-app` 1, `applicationsets-app` 2) make "projects first" true.
+- Only manifests that work out of the box are synced. Anything that needs your tokens, org, cluster or secrets is in
+  `examples/` or `plugins/`, so nothing with a placeholder can be pruned into a live cluster or overwrite Argo CD's own
+  configuration.
+- `rbac-app` has `prune: false`: it must never delete Argo CD's own ConfigMap.
+
+## Run it
+
+Needs a cluster (`kind create cluster`, k3s, ...) and `kubectl`. Destination is the cluster Argo CD runs in
+(`https://kubernetes.default.svc`).
 
 ```bash
-# 1. Install k3s (single-node)
-curl -sfL https://get.k3s.io | sh -
-
-# 2. Install ArgoCD
 kubectl create namespace argocd
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+# --server-side: the ApplicationSet CRD is too large for client-side apply
+kubectl apply --server-side --force-conflicts -n argocd \
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.6/manifests/install.yaml
+kubectl apply -f bootstrap/root-app.yaml
 
-# 3. Apply root-app — this is the only manual apply needed
-kubectl apply -f apps/root-app-of-apps-entry-point.yml
-
-# ArgoCD will now sync all child apps (projects-app, rbac-app,
-# applicationsets-app) and manage the full control plane declaratively.
+kubectl -n argocd get applications     # root-app, projects-app, rbac-app, applicationsets-app,
+                                       # test-deploy-staging, test-deploy-production
 ```
 
-After bootstrap, every change to this repo is picked up automatically via selfHeal + automated sync.
+To use your own fork, change `repoURL` in `bootstrap/root-app.yaml`, `apps/child-applications.yml`, the AppSets and the
+`sourceRepos` in `projects/`.
 
-## App-of-apps wiring
+## What each live piece teaches
 
-```
-root-app  (watches apps/)
-├── projects-app       → projects/   (AppProject — synced first; apps reference these)
-├── rbac-app           → rbac/       (RBAC ConfigMap, Dex SSO, ExternalSecret)
-└── applicationsets-app → applicationsets/  (auto-discover + PR preview AppSets)
-```
+| File | Concept |
+|---|---|
+| `apps/child-applications.yml` | App-of-apps, sync waves, `prune: false` for config you must not lose |
+| `projects/default-project-rbac-and-source-repos.yml` | AppProject: allowed repos, destinations, cluster-scoped resource whitelist, project roles and groups |
+| `rbac/argocd-rbac-cm.yaml` | Argo CD 3.x RBAC: `update/*` and `delete/*` sub-resource policies, `applicationsets` resource, group mapping, `policy.default` |
+| `applicationsets/matrix-...yml` | Matrix of two list generators, `goTemplate` with `missingkey=error`, per-environment `kustomize.replicas` |
+| `applicationsets/pr-preview-...yml` | Pull request generator: `repo` is required (one AppSet per repo), the params it really emits (`number`, `branch_slug`, `head_sha`, ...), preview namespace per PR |
 
-`projects/` and `rbac/` are now fully declarative — no manual `kubectl apply` needed after initial bootstrap.
+## Not synced: `examples/` and `plugins/`
 
-## ApplicationSets
+| Path | Teaches |
+|---|---|
+| `examples/applicationsets/github-org-scm-provider-auto-discover-appset.yml` | SCM provider generator on a GitHub **organization** (it calls the org API, so it does not work for a personal account such as `docaohieu2808`) |
+| `examples/applicationsets/gitlab-group-scm-provider-auto-discover-appset.yml` | SCM provider on a self-hosted GitLab `group` (required) with subgroups |
+| `examples/applicationsets/cluster-generator-example.yml` | Cluster generator over registered clusters |
+| `examples/rbac/cluster-registration-secret-example.yaml` | Registering a remote cluster with a Secret |
+| `examples/sso/dex-gitlab-connector-argocd-cm-patch-example.yaml` | Dex + GitLab SSO as a `kubectl patch` of `argocd-cm`; secrets via `$dex.gitlab.clientSecret` from `argocd-secret`; the `oidc` connector needs `insecureEnableGroups: true` to emit groups |
+| `examples/projects/production-sync-window-project-example.yml` | Sync windows with an explicit `timeZone` |
+| `examples/plain-yaml-app-example.yml`, `examples/helm-and-kustomize-apps-example.yml` | Plain, Helm and Kustomize sources (`kustomize.images` is a list of `name=ref` strings; Ingress uses Traefik, ingress-nginx is archived) |
+| `plugins/` | Config Management Plugin (CMP) |
 
-| File | Generator | Purpose |
-|---|---|---|
-| `github-docaohieu2808-auto-discover-repos-appset.yml` | `scmProvider` | Auto-deploy all GitHub repos tagged `argocd-managed` with `Chart.yaml` |
-| `github-docaohieu2808-pr-preview-appset.yml` | `pullRequest` | Ephemeral preview env per PR labelled `preview` |
-| `gitlab-docaohieu-self-hosted-auto-discover-repos-appset.yml` | `scmProvider` | Auto-deploy from self-hosted GitLab |
-| `multi-env-staging-production-matrix-appset.yml` | `matrix` | Deploy same app to staging + production via matrix |
+### The envsubst CMP
 
-**Note:** `scmProvider` and `pullRequest` generators use different template variables and are kept in separate ApplicationSet resources to avoid `missingkey=error` render failures.
+A CMP is not a Kubernetes resource (the `ConfigManagementPlugin` CRD was removed in Argo CD 2.8). Its spec is a
+`plugin.yaml` file read by a sidecar of `argocd-repo-server`:
 
-## Destination cluster
+1. `plugins/envsubst-cmp-plugin-configmap.yaml`: ConfigMap with key `plugin.yaml` (discover `**/*.yaml.tmpl`, generate with
+   `envsubst`; only an allow-list of variables is substituted and nothing from the repo is sourced as shell).
+2. `plugins/Dockerfile`: sidecar image (`alpine` + `gettext`). Build and push it, then set the image in the patch.
+3. `plugins/envsubst-cmp-repo-server-sidecar-patch.yaml`: adds the sidecar using the volumes the stock install already has
+   (`var-files` carries the `argocd-cmp-server` binary copied by repo-server's own init container, so it always matches the
+   Argo CD version; `plugins` holds the socket).
+4. `plugins/envsubst-cmp-example-application.yaml` + `plugins/example-app/`: an Application that only renders through the plugin.
 
-All resources target `https://rancher.example.com/k8s/clusters/local` (Rancher-proxied local cluster). For in-cluster ArgoCD (no Rancher), replace with `https://kubernetes.default.svc`.
+## What CI checks
 
-## Sync windows
+`.github/workflows/ci.yml`, on every push, pull request, weekly (Monday 02:37 UTC) and on demand:
 
-`default-project` has a production sync window restricting automated syncs to business hours (see `projects/default-project-rbac-and-source-repos.yml`). Manual sync is always available.
+- **lint**: actionlint, shellcheck, yamllint, hadolint, every action pinned to an existing commit SHA, and
+  `kubeconform -strict` over every manifest with Kubernetes 1.37 schemas plus the Argo CD CRD schemas
+  ([datreeio/CRDs-catalog](https://github.com/datreeio/CRDs-catalog)).
+- **app-of-apps** (pinned Argo CD v3.5.6 and the newest upstream release): kind cluster, real Argo CD, `bootstrap/root-app.yaml`
+  applied against this repository at the commit under test (the root and, through a kustomize patch, all child Applications),
+  then it waits for `root-app`, `projects-app`, `rbac-app`, `applicationsets-app` and the generated `test-deploy-staging` and
+  `test-deploy-production` to be Synced and Healthy and asserts: exactly those two apps were generated, they run 1 and 2
+  ready replicas, the PR-preview AppSet has no `ErrorOccurred` condition and generates 0 apps (no PR is labelled), the 3.x
+  RBAC policy was applied, and `default-project` has no sync window.
+- **cmp** (same two Argo CD versions): builds the sidecar image, loads it into kind, installs the ConfigMap and the patch on
+  repo-server, then syncs an app that can only render through the plugin and checks the replicas and image came from the
+  templates.
+
+## Honest limits
+
+- Needs internet on the runner (Argo CD pulls this repo and `argocd-test-deploy` from GitHub); pull requests from forks
+  cannot run the e2e jobs because their commit is not fetchable from this repository.
+- The SCM-provider generators, SSO, and multi-cluster examples are validated against the CRD schemas only: they need a real
+  organization, GitLab group, token or second cluster.
+- Notification annotations are not used: no notifications controller configuration ships here.
+
+## Updating Argo CD
+
+`ARGOCD_PINNED` in the workflow and the version in the install commands above move together; the `latest` matrix leg
+warns a week early when a new release breaks something.

@@ -1,0 +1,53 @@
+# Strategic-merge patch that adds the envsubst CMP sidecar to argocd-repo-server (Argo CD 3.x).
+#   kubectl -n argocd patch deployment argocd-repo-server --patch-file envsubst-cmp-repo-server-sidecar-patch.yaml
+# It reuses the two volumes the stock install already defines on repo-server:
+#   var-files  holds the argocd-cmp-server binary, copied there by repo-server's own `copyutil` init container,
+#              so the plugin server always matches the Argo CD version (no separate version pin needed);
+#   plugins    is the directory where the plugin server creates its unix socket for repo-server to find.
+# It adds the plugin.yaml ConfigMap volume and a writable /tmp (the root filesystem stays read-only).
+# The sidecar image must contain `envsubst` (package gettext); build plugins/Dockerfile and push it, then replace
+# the image below. Installing packages at start-up (postStart apk add) would fail on a read-only root filesystem.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argocd-repo-server
+  namespace: argocd
+spec:
+  template:
+    spec:
+      containers:
+        - name: envsubst-cmp
+          image: registry.example.com/argocd-cmp-envsubst:1.0.0
+          command: [/var/run/argocd/argocd-cmp-server]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          volumeMounts:
+            - name: var-files
+              mountPath: /var/run/argocd
+            - name: plugins
+              mountPath: /home/argocd/cmp-server/plugins
+            - name: cmp-plugin
+              mountPath: /home/argocd/cmp-server/config/plugin.yaml
+              subPath: plugin.yaml
+            - name: cmp-tmp
+              mountPath: /tmp
+      volumes:
+        - name: cmp-plugin
+          configMap:
+            name: argocd-envsubst-cmp-plugin
+        - name: cmp-tmp
+          emptyDir: {}

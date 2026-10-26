@@ -1,0 +1,180 @@
+# Proves the repo does what the README says, on every push and once a week (so a new Argo CD, kind or Kubernetes
+# release that breaks it shows up here):
+# - lint: actionlint, shellcheck, yamllint, hadolint, pinned-action check, kubeconform -strict with Argo CD schemas;
+# - app-of-apps: kind cluster + real Argo CD, bootstrap root-app against THIS repository at the commit under test,
+#   wait for every app to be Synced+Healthy and assert what the ApplicationSet controller generated;
+# - cmp: build the envsubst CMP sidecar, install it on repo-server and sync an app that needs the plugin.
+# The e2e jobs run on the pinned Argo CD release and on the newest upstream release.
+name: ci
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "37 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ARGOCD_PINNED: v3.5.6
+  KUBECONFORM_VERSION: v0.8.0
+  HADOLINT_VERSION: v2.15.1
+  ACTIONLINT_VERSION: 1.7.12
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: actionlint
+        run: |
+          bash <(curl -sSfL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash") "$ACTIONLINT_VERSION"
+          ./actionlint -color
+      - name: shellcheck
+        run: shellcheck ci/*.sh
+      - name: yamllint
+        run: pipx run --spec yamllint==1.38.0 yamllint -c .yamllint.yml .
+      - name: hadolint
+        run: |
+          curl -sSfLo hadolint "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-linux-x86_64"
+          chmod +x hadolint
+          ./hadolint plugins/Dockerfile
+      - name: Every action is pinned to a commit SHA that exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # An annotated tag object's SHA looks like a commit SHA but fails when a job runs, so ask the API.
+          refs=$(grep -rhE '^[[:space:]]*(- )?uses: *[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@' .github \
+            | sed -E 's/^[[:space:]]*(- )?uses: *//; s/[[:space:]].*$//' | sort -u)
+          status=0
+          while IFS=@ read -r ref sha; do
+            repo=$(echo "$ref" | cut -d/ -f1-2)
+            if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then echo "FAIL $ref@$sha is not pinned to a SHA"; status=1
+            elif gh api "repos/$repo/commits/$sha" --jq .sha >/dev/null 2>&1; then echo "ok   $ref@$sha"
+            else echo "FAIL $ref@$sha is not a commit"; status=1; fi
+          done <<< "$refs"
+          exit "$status"
+      - name: kubeconform -strict (Kubernetes 1.37 schemas + Argo CD CRD schemas)
+        run: |
+          curl -sSfLO "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          curl -sSfLo kc.sums "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/CHECKSUMS"
+          sha256sum -c --ignore-missing kc.sums
+          tar xzf kubeconform-linux-amd64.tar.gz kubeconform
+          # *.yaml.tmpl are envsubst templates, not valid YAML before rendering. The sidecar patch is a partial
+          # Deployment (a patch, not a resource); the cmp job applies it for real.
+          ./kubeconform -strict -summary -kubernetes-version 1.37.0 \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            -ignore-filename-pattern '.*\.yaml\.tmpl$' \
+            -ignore-filename-pattern 'plugins/envsubst-cmp-repo-server-sidecar-patch\.yaml$' \
+            bootstrap apps applicationsets projects rbac examples plugins
+
+  app-of-apps:
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        argocd: [pinned, latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resolve Argo CD version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ matrix.argocd }}
+        run: |
+          if [ "$CHANNEL" = pinned ]; then v=$ARGOCD_PINNED; else v=$(gh api repos/argoproj/argo-cd/releases/latest --jq .tag_name); fi
+          echo "ARGOCD_VERSION=$v" >> "$GITHUB_ENV"
+          echo "Argo CD $v"
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          version: v0.33.0
+          cluster_name: argocd-apps
+      - name: Install Argo CD
+        run: ci/install-argocd.sh "$ARGOCD_VERSION"
+      - name: Bootstrap root-app at the commit under test
+        env:
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Same file a user applies, with every revision pinned to the commit under test: the root-app itself,
+          # and (via a kustomize patch) all child Applications it renders.
+          yq '.spec.source.repoURL = "https://github.com/" + strenv(REPO) + ".git"
+              | .spec.source.targetRevision = strenv(SHA)
+              | .spec.source.kustomize.patches = [{"target": {"kind": "Application"},
+                  "patch": "- op: replace\n  path: /spec/source/targetRevision\n  value: " + strenv(SHA) + "\n- op: replace\n  path: /spec/source/repoURL\n  value: https://github.com/" + strenv(REPO) + ".git"}]' \
+            bootstrap/root-app.yaml | tee /dev/stderr | kubectl apply -f -
+      - name: Wait for every app to be Synced and Healthy
+        run: |
+          ci/wait-for-apps.sh 600 root-app projects-app rbac-app applicationsets-app
+          ci/wait-for-apps.sh 300 test-deploy-staging test-deploy-production
+      - name: Assert what the controllers generated
+        run: ci/assert-gitops-state.sh
+      - name: Show final state
+        if: always()
+        run: |
+          kubectl -n argocd get applications,applicationsets,appprojects
+          kubectl -n argocd logs deployment/argocd-applicationset-controller --tail=40 || true
+
+  cmp:
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        argocd: [pinned, latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resolve Argo CD version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ matrix.argocd }}
+        run: |
+          if [ "$CHANNEL" = pinned ]; then v=$ARGOCD_PINNED; else v=$(gh api repos/argoproj/argo-cd/releases/latest --jq .tag_name); fi
+          echo "ARGOCD_VERSION=$v" >> "$GITHUB_ENV"
+          echo "Argo CD $v"
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          version: v0.33.0
+          cluster_name: argocd-cmp
+      - name: Install Argo CD
+        run: ci/install-argocd.sh "$ARGOCD_VERSION"
+      - name: Build the sidecar image and load it into kind
+        run: |
+          docker build -t argocd-cmp-envsubst:ci plugins
+          kind load docker-image argocd-cmp-envsubst:ci --name argocd-cmp
+      - name: Install the plugin ConfigMap and patch repo-server
+        run: |
+          kubectl apply -n argocd -f plugins/envsubst-cmp-plugin-configmap.yaml
+          sed 's#registry.example.com/argocd-cmp-envsubst:1.0.0#argocd-cmp-envsubst:ci#' plugins/envsubst-cmp-repo-server-sidecar-patch.yaml > "$RUNNER_TEMP/patch.yaml"
+          kubectl -n argocd patch deployment argocd-repo-server --patch-file "$RUNNER_TEMP/patch.yaml"
+          kubectl -n argocd rollout status deployment/argocd-repo-server --timeout=300s
+          kubectl -n argocd get pods -l app.kubernetes.io/name=argocd-repo-server
+          kubectl -n argocd logs deployment/argocd-repo-server -c envsubst-cmp
+      - name: Sync an app that only renders through the plugin
+        env:
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          yq '.spec.source.repoURL = "https://github.com/" + strenv(REPO) + ".git" | .spec.source.targetRevision = strenv(SHA)' \
+            plugins/envsubst-cmp-example-application.yaml | kubectl apply -f -
+          ci/wait-for-apps.sh 300 cmp-envsubst-example
+      - name: Assert the templates were rendered
+        run: |
+          [ "$(kubectl -n cmp-envsubst-example get deployment cmp-envsubst-example -o jsonpath='{.spec.replicas}')" = 2 ]
+          [ "$(kubectl -n cmp-envsubst-example get deployment cmp-envsubst-example -o jsonpath='{.spec.template.spec.containers[0].image}')" = nginx:1.30.6-alpine ]
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl -n argocd get applications -o yaml
+          kubectl -n argocd logs deployment/argocd-repo-server --all-containers --tail=100

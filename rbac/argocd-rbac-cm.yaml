@@ -1,7 +1,7 @@
-# ArgoCD Level 5 — RBAC Multi-Team Configuration
-# Defines three roles: admin, developer, viewer
-# Maps GitLab groups (via Dex SSO) to ArgoCD roles
-# Apply after argocd-sso-dex-oidc-config.yaml is configured
+# Argo CD RBAC for three roles (admin, developer, viewer). Managed by rbac-app with prune OFF.
+# Groups come from the SSO provider; see examples/sso/ for the Dex + GitLab connector that emits them.
+# Argo CD 3.x notes: `update` and `delete` on an application no longer cover its sub-resources, so
+# developers get explicit `update/*` and `delete/*` (denied for delete); ApplicationSets have their own resource.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -11,17 +11,12 @@ metadata:
     app.kubernetes.io/name: argocd-rbac-cm
     app.kubernetes.io/part-of: argocd
 data:
-  # Default role for authenticated users who match no group mapping
   policy.default: role:viewer
 
-  # CSV policy definition
-  # Format: p, <role>, <resource>, <action>, <object>, allow|deny
-  # Format: g, <entity>, <role>
   policy.csv: |
-    # ─── Role Definitions ──────────────────────────────────────────────────────
-
-    # role:admin — full access to all applications and clusters
+    # role:admin
     p, role:admin, applications, *, */*, allow
+    p, role:admin, applicationsets, *, */*, allow
     p, role:admin, clusters, *, *, allow
     p, role:admin, repositories, *, *, allow
     p, role:admin, projects, *, *, allow
@@ -31,46 +26,38 @@ data:
     p, role:admin, logs, get, */*, allow
     p, role:admin, exec, create, */*, allow
 
-    # role:developer — sync + view but NO delete, no cluster/repo admin
+    # role:developer: deploy and view, no delete, no cluster/repo admin
     p, role:developer, applications, get, */*, allow
     p, role:developer, applications, create, */*, allow
     p, role:developer, applications, update, */*, allow
+    p, role:developer, applications, update/*, */*, allow
     p, role:developer, applications, sync, */*, allow
     p, role:developer, applications, override, */*, allow
     p, role:developer, applications, action/*, */*, allow
     p, role:developer, applications, delete, */*, deny
+    p, role:developer, applications, delete/*, */*, deny
+    p, role:developer, applicationsets, get, */*, allow
     p, role:developer, repositories, get, *, allow
     p, role:developer, projects, get, *, allow
     p, role:developer, logs, get, */*, allow
     p, role:developer, exec, create, */*, deny
 
-    # role:viewer — read-only across all resources
+    # role:viewer: read-only
     p, role:viewer, applications, get, */*, allow
+    p, role:viewer, applicationsets, get, */*, allow
     p, role:viewer, repositories, get, *, allow
     p, role:viewer, clusters, get, *, allow
     p, role:viewer, projects, get, *, allow
     p, role:viewer, logs, get, */*, allow
 
-    # ─── Group → Role Mappings ─────────────────────────────────────────────────
-    # Groups are sourced from GitLab via Dex OIDC connector
-    # GitLab group path format: <namespace>/<group-name>
-
-    # Platform/infra team → admin
+    # Group -> role. GitLab emits full group paths ("myorg/devops-team"), so use the same form here.
     g, devops-team, role:admin
     g, platform-team, role:admin
-
-    # Dev teams → developer (can deploy but not delete)
     g, backend-team, role:developer
     g, frontend-team, role:developer
     g, dev-team, role:developer
-
-    # Stakeholders, QA observers → viewer
     g, qa-team, role:viewer
     g, management, role:viewer
 
-    # Local admin account always retains admin (fallback)
-    g, admin, role:admin
-
-  # Scopes extracted from OIDC token for group matching
-  # "groups" claim must be present in the token (configured in Dex connector)
+  # Token claims used to match groups
   scopes: "[groups, email]"

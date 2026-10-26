@@ -1,40 +1,39 @@
+# Example (not synced): auto-discover Helm repos in a GitHub ORGANIZATION.
+# The SCM provider generator calls the organization API, so it does not work for a personal account
+# (docaohieu2808 is a user, hence the placeholder org below). Params: organization, repository, url, branch,
+# sha, short_sha, labels, branchNormalized. Needs a Secret `argocd-github-token` (key `token`).
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: gitlab-docaohieu-auto-discover
+  name: github-docaohieu2808-auto-discover
   namespace: argocd
   labels:
-    app.kubernetes.io/managed-by: argocd
-    provider: gitlab
-    server: git.example.com
+    provider: github
 spec:
   goTemplate: true
   goTemplateOptions: ["missingkey=error"]
 
   generators:
-    # SCM provider generator: auto-discovers all repos from self-hosted GitLab
     - scmProvider:
-        gitlab:
-          group: ""          # empty = discover all accessible groups/projects
-          api: https://git.example.com
+        github:
+          organization: example-org
           tokenRef:
-            secretName: gitlab-token
+            secretName: argocd-github-token
             key: token
           allBranches: false
-          includeSubgroups: true
         filters:
-          - branchMatch: "^(main|master)$"
+          - repositoryMatch: ".*"
+            branchMatch: "^(main|master)$"
             pathsExist:
-              - Chart.yaml
+              - Chart.yaml   # Helm apps only
             labelMatch: "argocd-managed"
 
   template:
     metadata:
-      name: "gitlab-{{.repository}}-{{.branch}}"
+      name: "github-{{.repository}}-{{.branch}}"
       namespace: argocd
       labels:
-        app.kubernetes.io/managed-by: argocd
-        provider: gitlab
+        provider: github
         repo: "{{.repository}}"
     spec:
       project: default-project
@@ -49,8 +48,8 @@ spec:
             - values.yaml
 
       destination:
-        server: https://rancher.example.com/k8s/clusters/local
-        namespace: "gitlab-{{.repository}}"
+        server: https://kubernetes.default.svc
+        namespace: "github-{{.repository}}"
 
       syncPolicy:
         automated:
@@ -59,7 +58,6 @@ spec:
           allowEmpty: false
         syncOptions:
           - CreateNamespace=true
-          - Validate=true
           - PrunePropagationPolicy=foreground
           - PruneLast=true
         retry:

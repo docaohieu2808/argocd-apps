@@ -1,3 +1,4 @@
+# Example (not synced): one Helm-based and one Kustomize-based Application with typical overrides.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -6,7 +7,6 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
   labels:
-    app.kubernetes.io/managed-by: argocd
     example: "true"
     manifest-type: helm
 spec:
@@ -43,10 +43,9 @@ spec:
           team: platform
       # Skip CRD installation (manage CRDs separately)
       skipCrds: false
-      version: v3
 
   destination:
-    server: https://rancher.example.com/k8s/clusters/local
+    server: https://kubernetes.default.svc
     namespace: helm-app
 
   syncPolicy:
@@ -56,7 +55,6 @@ spec:
       allowEmpty: false
     syncOptions:
       - CreateNamespace=true
-      - Validate=true
       - PrunePropagationPolicy=foreground
       - PruneLast=true
       - RespectIgnoreDifferences=true
@@ -84,7 +82,6 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
   labels:
-    app.kubernetes.io/managed-by: argocd
     example: "true"
     manifest-type: kustomize
 spec:
@@ -98,13 +95,13 @@ spec:
 
     kustomize:
       # Override image tags without editing kustomization.yaml
+      # Format is "<image name>=<new image reference>" (a list of strings, not objects)
       images:
-        - name: app
-          newTag: "1.0.0"
-      # Append common labels to all resources
+        - app=registry.example.com/app:1.0.0
       commonLabels:
         environment: production
-        managed-by: argocd
+      # Without this, commonLabels also rewrites selectors, which are immutable on existing Deployments
+      labelWithoutSelector: true
       # Append common annotations
       commonAnnotations:
         argocd.argoproj.io/managed: "true"
@@ -112,7 +109,7 @@ spec:
       namePrefix: "prod-"
 
   destination:
-    server: https://rancher.example.com/k8s/clusters/local
+    server: https://kubernetes.default.svc
     namespace: kustomize-app-production
 
   syncPolicy:
@@ -122,7 +119,6 @@ spec:
       allowEmpty: false
     syncOptions:
       - CreateNamespace=true
-      - Validate=true
       - PrunePropagationPolicy=foreground
     retry:
       limit: 5

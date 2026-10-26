@@ -1,0 +1,66 @@
+# Matrix generator: every app in the first list is deployed once per environment in the second list.
+# Today the app list holds one entry, the public argocd-test-deploy repo (plain YAML + kustomization.yaml),
+# so this renders two real Applications: test-deploy-staging (1 replica) and test-deploy-production (2).
+# Add more elements to the first list to fan out more apps.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: matrix-test-deploy
+  namespace: argocd
+  labels:
+    pattern: matrix-generator
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - matrix:
+        generators:
+          - list:
+              elements:
+                - repoURL: https://github.com/docaohieu2808/argocd-test-deploy.git
+                  appName: test-deploy
+                  path: k8s
+                  deploymentName: demo-web
+          - list:
+              elements:
+                - environment: staging
+                  replicas: "1"
+                - environment: production
+                  replicas: "2"
+  template:
+    metadata:
+      name: "{{.appName}}-{{.environment}}"
+      namespace: argocd
+      labels:
+        environment: "{{.environment}}"
+        app: "{{.appName}}"
+    spec:
+      project: default-project
+      source:
+        repoURL: "{{.repoURL}}"
+        targetRevision: HEAD
+        path: "{{.path}}"
+        kustomize:
+          replicas:
+            - name: "{{.deploymentName}}"
+              count: "{{.replicas}}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{.appName}}-{{.environment}}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+          allowEmpty: false
+        syncOptions:
+          - CreateNamespace=true
+          - PrunePropagationPolicy=foreground
+          - PruneLast=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
+  syncPolicy:
+    preserveResourcesOnDeletion: false

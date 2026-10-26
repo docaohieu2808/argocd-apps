@@ -1,0 +1,38 @@
+# Bootstrap Application: `kubectl apply` this ONE file after installing Argo CD; everything else is pulled from Git.
+# It is deliberately NOT inside apps/: an Application that manages itself would overwrite changes made to it
+# (CI retargets it to the commit under test), and it must exist before the `default-project` AppProject does.
+# It uses Argo CD's built-in `default` project for that reason. Destination is the cluster Argo CD runs in; to
+# manage a remote cluster register it first (examples/rbac/cluster-registration-secret-example.yaml).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root-app
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app.kubernetes.io/part-of: app-of-apps
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/docaohieu2808/argocd-apps.git
+    targetRevision: HEAD
+    # apps/ holds the child Applications and a kustomization.yaml listing them.
+    path: apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

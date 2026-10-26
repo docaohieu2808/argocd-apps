@@ -1,0 +1,49 @@
+# Example (not synced): Dex SSO against a self-hosted GitLab, as a PATCH for the existing argocd-cm.
+# Do not `kubectl apply` it over argocd-cm (that would replace the whole map); patch it:
+#   kubectl -n argocd patch configmap argocd-cm --patch-file dex-gitlab-connector-argocd-cm-patch-example.yaml
+#   kubectl -n argocd rollout restart deployment argocd-server argocd-dex-server
+# Prerequisites:
+#   1. In GitLab create an OAuth application, redirect URI https://argocd.example.com/api/dex/callback,
+#      scopes: read_user, openid, profile, email, read_api.
+#   2. Put the credentials in argocd-secret (never in Git) under the keys referenced below:
+#      kubectl -n argocd patch secret argocd-secret --type merge -p \
+#        '{"stringData":{"dex.gitlab.clientID":"<id>","dex.gitlab.clientSecret":"<secret>"}}'
+#      Argo CD expands "$dex.gitlab.clientID" from argocd-secret keys at runtime.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd
+data:
+  url: https://argocd.example.com
+  dex.config: |
+    connectors:
+      # Dex's native GitLab connector returns the user's groups (full paths) without extra flags.
+      - type: gitlab
+        id: gitlab
+        name: GitLab
+        config:
+          baseURL: https://git.example.com
+          clientID: $dex.gitlab.clientID
+          clientSecret: $dex.gitlab.clientSecret
+          redirectURI: https://argocd.example.com/api/dex/callback
+          # Only members of these groups may log in; remove to allow every GitLab user.
+          groups:
+            - myorg
+      # Alternative: the generic OIDC connector. It does NOT put groups in the token unless
+      # `insecureEnableGroups: true` is set (the "insecure" is Dex's wording for an unfinished spec feature).
+      # Without it every user falls through to policy.default (role:viewer).
+      # - type: oidc
+      #   id: gitlab-oidc
+      #   name: GitLab (OIDC)
+      #   config:
+      #     issuer: https://git.example.com
+      #     clientID: $dex.gitlab.clientID
+      #     clientSecret: $dex.gitlab.clientSecret
+      #     redirectURI: https://argocd.example.com/api/dex/callback
+      #     insecureEnableGroups: true
+      #     scopes: [openid, profile, email, groups]
+      #     claimMapping:
+      #       groups: groups
+  # Keep the local admin account as a break-glass login. Set to "false" only after SSO login is verified.
+  admin.enabled: "true"

@@ -1,28 +1,26 @@
+# AppProject used by every Application and ApplicationSet in this repo (except root-app/projects-app,
+# which live in the built-in `default` project because they create this one).
+# A sync-window example (business hours for production) is in examples/projects/: windows block automated
+# syncs outside the window, which would make a fresh install look broken, so none is active here.
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
   name: default-project
   namespace: argocd
-  finalizers:
-    - resources-finalizer.argocd.argoproj.io
-  labels:
-    app.kubernetes.io/managed-by: argocd
 spec:
-  description: "Default project for docaohieu2808 (GitHub) and git.example.com (GitLab) apps across staging and production"
+  description: "Apps from the docaohieu2808 GitHub account and the example GitLab, staging and production"
 
-  # Allowed source repositories
   sourceRepos:
     - "https://github.com/docaohieu2808/*"
     - "https://git.example.com/*"
-    - "https://charts.helm.sh/stable"
-    - "https://charts.bitnami.com/bitnami"
+    # Maintained Helm repositories (charts.helm.sh/stable is archived; Bitnami moved to OCI/Broadcom)
+    - "https://argoproj.github.io/argo-helm"
+    - "https://traefik.github.io/charts"
 
-  # Allowed destination clusters and namespaces
   destinations:
-    - server: https://rancher.example.com/k8s/clusters/local
+    - server: https://kubernetes.default.svc
       namespace: "*"
 
-  # Cluster-scoped resource whitelist
   clusterResourceWhitelist:
     - group: ""
       kind: Namespace
@@ -35,23 +33,15 @@ spec:
     - group: "apiextensions.k8s.io"
       kind: CustomResourceDefinition
 
-  # Namespace-scoped resource blacklist (deny sensitive resources)
   namespaceResourceBlacklist:
     - group: ""
       kind: ResourceQuota
     - group: ""
       kind: LimitRange
 
-  # Namespace-scoped resource whitelist
-  namespaceResourceWhitelist:
-    - group: "*"
-      kind: "*"
-
-  # Orphaned resources monitoring
   orphanedResources:
     warn: true
 
-  # RBAC roles within this project
   roles:
     - name: staging-deployer
       description: "Can sync staging applications"
@@ -77,18 +67,3 @@ spec:
         - "p, proj:default-project:read-only, applications, get, default-project/*, allow"
       groups:
         - developers
-
-  # Sync windows: restrict production syncs to business hours
-  syncWindows:
-    - kind: allow
-      schedule: "0 8 * * 1-5"   # Mon–Fri 08:00
-      duration: 10h
-      applications:
-        - "*-production"
-      manualSync: true
-    - kind: allow
-      schedule: "* * * * *"     # always open for staging
-      duration: 24h
-      applications:
-        - "*-staging"
-      manualSync: true

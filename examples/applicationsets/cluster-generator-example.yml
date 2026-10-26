@@ -1,0 +1,33 @@
+# Example (not synced): deploy one app to every registered cluster labelled environment=staging
+# (see examples/rbac/cluster-registration-secret-example.yaml for the label).
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: deploy-to-all-staging-clusters
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            environment: staging
+  template:
+    metadata:
+      name: "{{.name}}-test-deploy"
+    spec:
+      project: default-project
+      source:
+        repoURL: https://github.com/docaohieu2808/argocd-test-deploy.git
+        targetRevision: HEAD
+        path: k8s
+      destination:
+        server: "{{.server}}"
+        namespace: test-deploy
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

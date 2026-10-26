@@ -1,0 +1,24 @@
+# Example (not synced by root-app): an AppProject whose production apps may only auto-sync during business hours.
+# - A window is evaluated in UTC unless `timeZone` is set, so it is set explicitly.
+# - Once any `allow` window matches an app, syncs outside it are blocked (manual syncs stay possible: manualSync).
+# - Staging has no window: with no deny window and no allow window, syncs are always permitted.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: business-hours-project
+  namespace: argocd
+spec:
+  description: "Production auto-syncs Mon-Fri 08:00-18:00 Asia/Ho_Chi_Minh"
+  sourceRepos:
+    - "https://github.com/docaohieu2808/*"
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: "*"
+  syncWindows:
+    - kind: allow
+      schedule: "0 8 * * 1-5"
+      duration: 10h
+      timeZone: Asia/Ho_Chi_Minh
+      applications:
+        - "*-production"
+      manualSync: true

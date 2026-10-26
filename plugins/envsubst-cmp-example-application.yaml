@@ -1,0 +1,29 @@
+# Application that renders plugins/example-app/*.yaml.tmpl through the envsubst CMP.
+# Requires the plugin ConfigMap and the sidecar patch from this directory to be installed first.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cmp-envsubst-example
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/docaohieu2808/argocd-apps.git
+    targetRevision: HEAD
+    path: plugins/example-app
+    plugin:
+      name: envsubst-yaml-tmpl
+      env:
+        - name: IMAGE_TAG
+          value: 1.30.6-alpine
+        - name: REPLICAS
+          value: "2"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cmp-envsubst-example
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

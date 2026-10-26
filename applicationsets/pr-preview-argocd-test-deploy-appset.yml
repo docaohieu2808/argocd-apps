@@ -1,0 +1,62 @@
+# Pull request generator: one ephemeral preview Application per open PR labelled "preview" on ONE repo.
+# `repo` is required by the generator, so there is one AppSet per repository; copy this file to cover another repo.
+# Params emitted: number, title, branch, branch_slug, target_branch, target_branch_slug, head_sha,
+# head_short_sha, head_short_sha_7, labels, author. (There is no `.repository`, `.url` or `.organization`.)
+# The Application is deleted by the controller when the PR closes or loses the label (requeue interval below).
+# Without a token the GitHub API allows 60 requests/hour, enough for this interval on a public repo.
+# For private repos or many PRs, create a Secret `argocd-github-token` (key `token`) and uncomment tokenRef:
+#   kubectl -n argocd create secret generic argocd-github-token --from-literal=token=<fine-grained PAT, read-only>
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: pr-preview-argocd-test-deploy
+  namespace: argocd
+  labels:
+    type: pr-preview
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - pullRequest:
+        github:
+          owner: docaohieu2808
+          repo: argocd-test-deploy
+          labels:
+            - preview
+          # tokenRef:
+          #   secretName: argocd-github-token
+          #   key: token
+        requeueAfterSeconds: 300
+  template:
+    metadata:
+      name: "pr-preview-argocd-test-deploy-{{.number}}"
+      namespace: argocd
+      labels:
+        type: pr-preview
+        pr-number: "{{.number}}"
+    spec:
+      project: default-project
+      source:
+        repoURL: https://github.com/docaohieu2808/argocd-test-deploy.git
+        targetRevision: "{{.head_sha}}"
+        path: k8s
+      destination:
+        server: https://kubernetes.default.svc
+        # Includes the repo name so two repos with the same PR number or branch never collide.
+        namespace: "pr-preview-argocd-test-deploy-{{.number}}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: false   # preview environments are reviewed by hand, not force-reconciled
+          allowEmpty: false
+        syncOptions:
+          - CreateNamespace=true
+          - PrunePropagationPolicy=foreground
+        retry:
+          limit: 3
+          backoff:
+            duration: 10s
+            factor: 2
+            maxDuration: 2m
+  syncPolicy:
+    preserveResourcesOnDeletion: false

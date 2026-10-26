@@ -1,0 +1,14 @@
+# Keeps pinned actions and the CMP sidecar base image current. Pins stay SHAs; Dependabot moves them.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directory: /plugins
+    schedule:
+      interval: weekly

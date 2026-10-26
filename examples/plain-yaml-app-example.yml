@@ -1,3 +1,4 @@
+# Example (not synced): a plain-YAML Application plus the manifests it would deploy.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -6,7 +7,6 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
   labels:
-    app.kubernetes.io/managed-by: argocd
     example: "true"
     manifest-type: plain-yaml
 spec:
@@ -20,7 +20,7 @@ spec:
     # No helm/kustomize block = ArgoCD treats files as plain Kubernetes YAML
 
   destination:
-    server: https://rancher.example.com/k8s/clusters/local
+    server: https://kubernetes.default.svc
     namespace: simple-app
 
   syncPolicy:
@@ -30,7 +30,6 @@ spec:
       allowEmpty: false
     syncOptions:
       - CreateNamespace=true
-      - Validate=true
       - PrunePropagationPolicy=foreground
     retry:
       limit: 5
@@ -61,7 +60,7 @@ spec:
     spec:
       containers:
         - name: simple-app
-          image: nginx:stable-alpine
+          image: nginx:1.30.6-alpine
           ports:
             - containerPort: 80
           resources:
@@ -90,10 +89,9 @@ kind: Ingress
 metadata:
   name: simple-app
   namespace: simple-app
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
-  ingressClassName: nginx
+  # ingress-nginx was archived in March 2026; k3s ships Traefik, so the example targets that class.
+  ingressClassName: traefik
   rules:
     - host: simple-app.example.com
       http:
