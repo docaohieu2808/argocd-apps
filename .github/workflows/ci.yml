@@ -121,6 +121,8 @@ jobs:
         if: always()
         run: |
           kubectl -n argocd get applications,applicationsets,appprojects
+          kubectl -n argocd get applications -l app=test-deploy -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.source.kustomize}{"\n"}{end}'
+          kubectl get deployments -A | grep demo-web || true
           kubectl -n argocd logs deployment/argocd-applicationset-controller --tail=40 || true
 
   cmp:

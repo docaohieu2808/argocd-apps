@@ -5,6 +5,11 @@
 set -euo pipefail
 
 version=$1
+diagnose() {
+  kubectl -n argocd get pods -o wide || true
+  kubectl -n argocd describe pods | grep -E '^Name:|Events:|Warning|Failed|Back-off' || true
+}
+trap diagnose ERR
 kubectl create namespace argocd
 kubectl apply --server-side --force-conflicts -n argocd \
   -f "https://raw.githubusercontent.com/argoproj/argo-cd/${version}/manifests/install.yaml"
