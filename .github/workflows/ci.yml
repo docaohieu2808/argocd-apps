@@ -98,7 +98,7 @@ jobs:
           version: v0.33.0
           cluster_name: argocd-apps
       - name: Install Argo CD
-        run: ci/install-argocd.sh "$ARGOCD_VERSION"
+        run: ci/install-argocd.sh "$ARGOCD_VERSION" argocd-apps
       - name: Bootstrap root-app at the commit under test
         env:
           SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -150,7 +150,7 @@ jobs:
           version: v0.33.0
           cluster_name: argocd-cmp
       - name: Install Argo CD
-        run: ci/install-argocd.sh "$ARGOCD_VERSION"
+        run: ci/install-argocd.sh "$ARGOCD_VERSION" argocd-cmp
       - name: Build the sidecar image and load it into kind
         run: |
           docker build -t argocd-cmp-envsubst:ci plugins
